@@ -1,0 +1,114 @@
+# ==========================================================
+# 🧠 Emotion Detection Project - .gitignore
+# ==========================================================
+
+# -------------------------------
+# Python cache & bytecode files
+# -------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.pkl
+*.pickle
+*.log
+
+# -------------------------------
+# Virtual environments
+# -------------------------------
+venv/
+.venv/
+env/
+ENV/
+.ENV/
+*.env
+*.venv
+
+# -------------------------------
+# Jupyter & IPython
+# -------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# -------------------------------
+# OS-generated files
+# -------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------------
+# Data & models (large or private)
+# -------------------------------
+# data/
+# datasets/
+# raw_data/
+# processed_data/
+# *.csv
+# *.tsv
+# *.xlsx
+# *.jsonl
+# *.zip
+# *.tar
+# *.gz
+
+data/
+# -------------------------------
+# Model checkpoints and weights
+# -------------------------------
+*.pt
+*.pth
+*.h5
+*.ckpt
+checkpoints/
+saved_models/
+model_outputs/
+
+# -------------------------------
+# Results and reports
+# -------------------------------
+results/
+outputs/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# -------------------------------
+# Environment and dependency files
+# -------------------------------
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# -------------------------------
+# IDE / Editor files
+# -------------------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# -------------------------------
+# Temporary or debug files
+# -------------------------------
+*.tmp
+*.temp
+*.bak
+*.swp
+*.out
+*.err
+*.pid
+
+# -------------------------------
+# HuggingFace / cache directories
+# -------------------------------
+.cache/
+.huggingface/
+transformers_cache/
+datasets_cache/
+torch_cache/
