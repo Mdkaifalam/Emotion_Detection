@@ -53,7 +53,7 @@ desktop.ini
 # *.tar
 # *.gz
 
-data/
+# data/
 # -------------------------------
 # Model checkpoints and weights
 # -------------------------------
