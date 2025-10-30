@@ -61,6 +61,7 @@ desktop.ini
 *.pth
 *.h5
 *.ckpt
+log/
 checkpoints/
 saved_models/
 model_outputs/
