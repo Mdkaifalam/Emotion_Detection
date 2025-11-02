@@ -6,21 +6,23 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import classification_report, multilabel_confusion_matrix, f1_score, accuracy_score, precision_score, recall_score
+from sklearn.metrics import classification_report, multilabel_confusion_matrix, f1_score, accuracy_score, precision_score, recall_score, jaccard_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 
-# ------------------------------------------------
-# 1️⃣ Load Dataset
-# ------------------------------------------------
-
-cuda_idx = 7
+cuda_idx = 5
 data_dir = "data"
+save_best = True
+LR = 5e-5
+weight_type = "Balanced"
+EPOCHS = 15
+results_dir = f"results/mlp/LR_{LR}"
+best_result_dir = "results/best_model_test_results.csv"
+
 train_df = pd.read_csv(os.path.join(data_dir,"train.csv"))
 val_df   = pd.read_csv(os.path.join(data_dir,"val.csv"))
 test_df  = pd.read_csv(os.path.join(data_dir,"test.csv"))
-results_dir = "results/rnn"
 emotion_cols = ['joy','sadness','anger','fear','surprise','disgust','love','neutral']
 X_train, y_train = train_df["clean_text"], train_df[emotion_cols]
 X_val,   y_val   = val_df["clean_text"],   val_df[emotion_cols]
@@ -85,20 +87,22 @@ test_loader  = DataLoader(EmotionDataset(X_test_tfidf, y_test), batch_size=64, s
 # ------------------------------------------------
 # 4️⃣ Model Definition
 # ------------------------------------------------
-class RNNClassifier(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes, dropout=0.3):
+class MLPClassifier(nn.Module):
+    def __init__(self, input_size, num_classes, hidden_dim=512, dropout=0.3):
         super().__init__()
-        self.rnn = nn.RNN(input_size=input_size, hidden_size=hidden_size, batch_first=True)
-        self.fc1 = nn.Linear(hidden_size, 64)
-        self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(64, num_classes)
+        self.net = nn.Sequential(
+            nn.Linear(input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, num_classes)
+        )
 
     def forward(self, x):
-        out, _ = self.rnn(x)
-        out = out[:, -1, :]
-        out = torch.relu(self.fc1(out))
-        out = self.dropout(out)
-        return self.fc2(out)
+        x = x.squeeze(1)  # remove 1 timestep dim
+        return self.net(x)
 
 # ------------------------------------------------
 # 5️⃣ Setup Training
@@ -108,20 +112,31 @@ device = torch.device(f"cuda:{cuda_idx}" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 
-model = RNNClassifier(input_size=X_train_tfidf.shape[1], hidden_size=128, num_classes=num_classes).to(device)
+model = MLPClassifier(input_size=X_train_tfidf.shape[1], num_classes=len(emotion_cols)).to(device)
 
-pos_counts = y_train.sum(axis=0).values
-neg_counts = len(y_train) - pos_counts
-weights = torch.tensor(neg_counts / pos_counts, dtype=torch.float32).to(device)
-weights = (neg_counts / pos_counts)
-weights = weights / weights.mean()
+# pos_counts = y_train.sum(axis=0).values
+# neg_counts = len(y_train) - pos_counts
+# weights = torch.tensor(neg_counts / pos_counts, dtype=torch.float32).to(device)
+# weights = (neg_counts / pos_counts)
+# weights = weights / weights.mean()
 
+# criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(weights).to(device))
+pos_counts = y_train.sum(axis=0).values.astype(np.float64)        # (#1s per class)
+total = len(y_train)
+neg_counts = total - pos_counts
 
-print(weights)
-criterion = nn.BCEWithLogitsLoss(pos_weight=weights)
+# avoid division by zero
+pos_counts = np.where(pos_counts == 0, 1.0, pos_counts)
+
+raw_w = neg_counts / pos_counts                   # imbalance ratio
+raw_w = np.clip(raw_w, 1.0, 10.0)                 # cap extremes (tame gradients)
+w = raw_w / raw_w.mean()                          # normalize around 1.0
+
+pos_weight = torch.tensor(w, dtype=torch.float32, device=device)
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 # criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.Adam(model.parameters(), lr=5e-5)
+optimizer = optim.Adam(model.parameters(), lr=LR)
 
 # ------------------------------------------------
 # 6️⃣ Training Loop
@@ -155,7 +170,7 @@ def train_model(model, train_loader, val_loader, epochs=10):
 
     return history
 
-history = train_model(model, train_loader, val_loader, epochs=20)
+history = train_model(model, train_loader, val_loader, epochs=EPOCHS)
 
 # ------------------------------------------------
 # 7️⃣ Plot + Save Loss Graph
@@ -165,7 +180,7 @@ os.makedirs(results_dir, exist_ok=True)
 plt.figure(figsize=(8,5))
 plt.plot(history['train_loss'], label="Train Loss")
 plt.plot(history['val_loss'], label="Val Loss")
-plt.title("RNN Training vs Validation Loss")
+plt.title("MLP Training vs Validation Loss")
 plt.xlabel("Epochs")
 plt.ylabel("Loss")
 plt.legend()
@@ -183,51 +198,86 @@ pd.DataFrame(history).to_csv(os.path.join(results_dir,"training_history.csv"), i
 def evaluate_model_torch(model, loader, dataset_name="Test Set", threshold=0.5):
     model.eval()
     y_true, y_pred = [], []
+
     with torch.no_grad():
         for X_batch, y_batch in loader:
             X_batch = X_batch.to(device)
-            outputs = torch.sigmoid(model(X_batch)).cpu().numpy()
-            preds = (outputs > threshold).astype(int)
+            logits = model(X_batch)
+            probs = torch.sigmoid(logits).cpu().numpy()
+            preds = (probs > threshold).astype(int)
             y_pred.extend(preds)
             y_true.extend(y_batch.numpy())
 
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
 
-    f1_micro = f1_score(y_true, y_pred, average='micro')
-    f1_macro = f1_score(y_true, y_pred, average='macro')
-    precision = precision_score(y_true, y_pred, average='micro')
-    recall = recall_score(y_true, y_pred, average='micro')
-    accuracy = accuracy_score(y_true, y_pred)
+    # Metrics
+    subset_acc = accuracy_score(y_true, y_pred)  # exact match accuracy
+    jaccard_acc = jaccard_score(y_true, y_pred, average="samples", zero_division=0)
+    micro_p = precision_score(y_true, y_pred, average="micro", zero_division=0)
+    micro_r = recall_score(y_true, y_pred, average="micro", zero_division=0)
+    micro_f1 = f1_score(y_true, y_pred, average="micro", zero_division=0)
+    macro_p = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    macro_r = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
-    print(f"\n{dataset_name} Results:")
-    print(f"Threshold : {threshold} | Accuracy: {accuracy:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-micro: {f1_micro:.4f}")
-    print("\nClassification Report:\n")
-    print(classification_report(y_true, y_pred, target_names=emotion_cols, zero_division=0))
+    print(f"\n{dataset_name} @ threshold={threshold}")
+    print(f"Micro F1: {micro_f1:.4f} | Macro F1: {macro_f1:.4f} | Jaccard: {jaccard_acc:.4f}")
 
     return {
-        "Threshold":threshold,
-        "Accuracy": accuracy,
-        "Precision_micro": precision,
-        "Recall_micro": recall,
-        "F1_micro": f1_micro,
-        "F1_macro": f1_macro
+        "micro_precision": micro_p,
+        "micro_recall": micro_r,
+        "micro_f1": micro_f1,
+        "macro_precision": macro_p,
+        "macro_recall": macro_r,
+        "macro_f1": macro_f1,
+        "subset_accuracy": subset_acc,
+        "jaccard_accuracy": jaccard_acc
     }
 
 # ------------------------------------------------
 # 9️⃣ Evaluate and Save Results
 # ------------------------------------------------
 all_result = []
-for t in [0.2,0.3,0.4,0.5]:
+for t in [0.1, 0.2, 0.3, 0.4, 0.5]:
     val_result  = evaluate_model_torch(model, val_loader, "Validation Set", threshold=t)
     test_result = evaluate_model_torch(model, test_loader, "Test Set", threshold=t)
 
-    result = {"Model": "PyTorch RNN (TF-IDF, Multi-label)"}
+    result = {"Model": "MLP (TF-IDF)", "Threshold" : t}
     result.update(test_result)
-    all_result.update(result)
+    all_result.append(result)
 
-result_df = pd.DataFrame([all_result])
-result_df.to_csv(os.path.join(results_dir, "best_rnn_test_results.csv"), index=False)
-print("\n✅ Saved results to ../results/rnn/best_rnn_test_results.csv")
+result_df = pd.DataFrame(all_result)
+result_path = os.path.join(results_dir, "best_mlp_test_results.csv")
+result_df.to_csv(result_path, index=False)
+print(f"\nSaved results to {result_path} ")
+
+if save_best:
+    best_score = result_df.loc[result_df["micro_f1"].idxmax()]  
+    best_score = pd.DataFrame([best_score])
+    
+    if "Threshold" in best_score.index:
+        best_score = best_score.drop("Threshold")
+
+    cols = [
+        "Model","micro_precision","micro_recall","micro_f1",
+        "macro_precision","macro_recall","macro_f1",
+        "subset_accuracy","jaccard_accuracy"
+    ]
+    best_score = best_score[cols]
+
+    if os.path.exists(best_result_dir):
+        all_best = pd.read_csv(best_result_dir)
+    else:
+        all_best = pd.DataFrame(columns=cols)
+
+
+    all_best = pd.concat([all_best, best_score], ignore_index=True)
+
+
+    all_best.to_csv(best_result_dir, index=False)
+    print(f"✅ Appended best model result to {best_result_dir}")
+
 
 # ------------------------------------------------
 # 🔟 Confusion Matrices

@@ -61,6 +61,7 @@ desktop.ini
 *.pth
 *.h5
 *.ckpt
+
 log/
 checkpoints/
 saved_models/
@@ -70,12 +71,12 @@ model_outputs/
 # Results and reports
 # -------------------------------
 results/
-outputs/
 *.png
 *.jpg
 *.jpeg
 *.svg
 *.pdf
+*.pt
 
 # -------------------------------
 # Environment and dependency files
